@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Catch the Distracted Dev</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            touch-action: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            height: 80vh;
+            border: 4px solid #0f3460;
+            background: #16213e;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        #start-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 52, 96, 0.95);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            z-index: 10;
+        }
+
+        button {
+            padding: 20px 40px;
+            font-size: 1.5rem;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(233, 69, 96, 0.5);
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        .funny-text {
+            font-size: 0.8rem;
+            margin-top: 20px;
+            color: #4ecca3;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="game-container">
+        <div id="ui">Score: <span id="score">0</span> | Focus: <span id="focus">100</span>%</div>
+
+        <div id="start-screen">
+            <h1 style="margin-bottom:0">CATCH THE DEPLOY 🚀</h1>
+            <p style="color: #ffcc00; font-size: 1.1rem; margin-top: 5px; letter-spacing: 2px;"><b>A GAME MADE FOR DEVELOPERS 💻</b></p>
+            <p style="color: #4ecca3"><b>TURN SOUND ON! 🔊</b></p>
+            <p>Dodge Meetings. Catch Deploys.</p>
+            <button id="startBtn">START SPRINT</button>
+            <p class="funny-text">"It worked on my machine."</p>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <!-- Audio now handled by Web Audio API synthesiser for reliable zero-latency play -->
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const focusEl = document.getElementById('focus');
+        const startScreen = document.getElementById('start-screen');
+        const startBtn = document.getElementById('startBtn');
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const synthMaster = audioCtx.createGain();
+        synthMaster.gain.value = 0.1; // background volume
+        synthMaster.connect(audioCtx.destination);
+
+        const bgm = {
+            loop: true,
+            paused: true,
+            interval: null,
+            play: function() {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                if (!this.paused) return Promise.resolve();
+                this.paused = false;
+                
+                // Retro 8-bit arpeggio loop! 🎵
+                const melody = [261.63, 329.63, 392.00, 523.25, 392.00, 329.63]; 
+                let step = 0;
+                
+                this.interval = setInterval(() => {
+                    if (this.paused) { clearInterval(this.interval); return; }
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(melody[step % melody.length], audioCtx.currentTime);
+                    osc.connect(gain);
+                    gain.connect(synthMaster);
+                    
+                    gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                    
+                    osc.start(audioCtx.currentTime);
+                    osc.stop(audioCtx.currentTime + 0.1);
+                    
+                    step++;
+                }, 150);
+                return Promise.resolve();
+            },
+            pause: function() {
+                this.paused = true;
+                if (this.interval) clearInterval(this.interval);
+            }
+        };
+
+        const sfxGameOver = {
+            play: function() {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.5);
+                
+                osc.connect(gain);
+                gain.connect(synthMaster);
+                
+                // Louder game over crash sound
+                gain.gain.setValueAtTime(1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.5);
+            }
+        };
+
+        let score = 0;
+        let focus = 100;
+        let gameActive = false;
+        let player = { x: 0, y: 0, size: 40 };
+        let items = [];
+
+        // AUDIO UNLOCKER: Browsers need a literal click to allow audio
+        function unlockAudio() {
+            bgm.loop = true;
+            bgm.play().catch(e => console.log("Audio waiting for interaction"));
+            document.removeEventListener('click', unlockAudio);
+        }
+        document.addEventListener('click', unlockAudio);
+
+        function resize() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            player.x = canvas.width / 2;
+            player.y = canvas.height - 80;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        const handleMove = (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = (e.touches ? e.touches[0].clientX : e.clientX);
+            player.x = clientX - rect.left - (player.size / 2);
+        };
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('touchmove', handleMove);
+
+        function spawnItem() {
+            if (!gameActive) return;
+            const types = [
+                { char: '🚀', type: 'point' },
+                { char: '💬', type: 'enemy' },
+                { char: '📅', type: 'enemy' },
+                { char: '🐞', type: 'enemy' },
+                { char: '☕', type: 'buff' }
+            ];
+            const rand = Math.random();
+            let choice = types[0];
+            if (rand > 0.5) choice = types[1];
+            if (rand > 0.7) choice = types[2];
+            if (rand > 0.9) choice = types[4];
+
+            items.push({
+                x: Math.random() * (canvas.width - 40),
+                y: -50,
+                speed: 4 + Math.random() * 3,
+                ...choice
+            });
+            setTimeout(spawnItem, Math.max(300, 1000 - (score * 2)));
+        }
+
+        function update() {
+            if (!gameActive) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Player
+            ctx.font = '50px Arial';
+            ctx.fillText('👨‍💻', player.x, player.y);
+
+            for (let i = items.length - 1; i >= 0; i--) {
+                let it = items[i];
+                it.y += it.speed;
+                ctx.font = '35px Arial';
+                ctx.fillText(it.char, it.x, it.y);
+
+                // Collision
+                if (it.y > player.y - 30 && it.y < player.y + 30 &&
+                    it.x > player.x - 20 && it.x < player.x + 50) {
+
+                    if (it.type === 'point') score += 10;
+                    else if (it.type === 'enemy') {
+                        focus -= 20;
+                        canvas.style.backgroundColor = "#ff4d4d";
+                        setTimeout(() => canvas.style.backgroundColor = "transparent", 100);
+                    } else if (it.type === 'buff') focus = Math.min(100, focus + 20);
+
+                    items.splice(i, 1);
+                    scoreEl.innerText = score;
+                    focusEl.innerText = focus;
+                    if (focus <= 0) gameOver();
+                    continue;
+                }
+                if (it.y > canvas.height) items.splice(i, 1);
+            }
+            requestAnimationFrame(update);
+        }
+
+        window.startGame = () => {
+            score = 0; focus = 100; items = [];
+            gameActive = true;
+            startScreen.style.display = 'none';
+            scoreEl.innerText = score;
+            focusEl.innerText = focus;
+
+            bgm.loop = true;
+            if (bgm.paused) {
+                bgm.play().catch(e => console.log("Audio play failed"));
+            }
+
+            spawnItem();
+            update();
+        };
+        startBtn.onclick = window.startGame;
+
+        function gameOver() {
+            gameActive = false;
+            sfxGameOver.play();
+
+            startScreen.style.display = 'flex';
+            startScreen.innerHTML = `
+            <h1 style="color:#e94560">BURNOUT! 🔥</h1>
+            <p>You deployed ${score / 10} times before HR called.</p>
+            <button onclick="window.startGame()">RE-HIRE ME</button>
+        `;
+        }
+    </script>
+</body>
+
+</html>
